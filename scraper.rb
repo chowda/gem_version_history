@@ -4,31 +4,39 @@ require 'open-uri'
 require 'csv'
 require 'active_support/core_ext'
 
+THREAD_COUNT = 32	# Tweak thread count to maximize local performance.
+
 def main
 	gem_list = get_remote_list()
-	total_gems = gem_list.size
 	if gem_list.empty?
 		raise "No remote gems found!"
 	else
-		p "Total gems found from remote: #{total_gems}"
+		p "Total gems found from remote: #{gem_list.size}"
 	end
 
-	version_holder = []
-	current_position = 1
-	gem_list[0,100].each do |g|
-		current_position += 1
-		p "on # #{g}| (#{(current_position / total_gems.to_f) * 100}%)" if current_position % 10 == 0
-		begin
-			page = Nokogiri::HTML(open("http://rubygems.org/gems/#{g}/versions"))
-			version_holder << versions = parse_version_history(page, g)
-		rescue Exception => e
-			p "Failed to parse gem #{g}. Exception: #{e}"
-		end
-	end
+	write_history_header()
 
-	write_history(version_holder)
+	mutex = Mutex.new
+	THREAD_COUNT.times.map {
+	  Thread.new(gem_list) do |gem_list|
+	    while current_gem = mutex.synchronize { gem_list.pop }
+	    	p "Starting on gem #{current_gem}"
+	      page = Nokogiri::HTML(open("http://rubygems.org/gems/#{current_gem}/versions"))
+	      versions = parse_version_history(page, current_gem)
+	      mutex.synchronize {
+	      	begin
+						write_history(versions)
+					rescue Exception => e
+						p "Failed to write #{current_gem}. Exception: #{e}"
+					end
+	      }
+	    end
+	  end
+	}.each(&:join)
 end
 
+# Uses local gem command to get full gem list from rubygems.
+# Returns array of gem names as strings.
 def get_remote_list
 	begin
 		raw_gem_string = `gem list --remote`
@@ -43,11 +51,15 @@ def get_remote_list
 	end
 end
 
+# Parses the raw gem name string that comes back from rubygems.
 def parse_gem_string(gems)
 	gems = gems.split("\n")
 	gems = gems.map{|g| g.split(" ").first }
 end
 
+# Uses Nokogiri to parse the rubygems page and pull out gem history.
+# Returns an array of arrays.
+#   Each inner array contains name, version number, date published, size in bytes.
 def parse_version_history(page, gem_name)
 	versions = []
 	page.css("div.versions ol li").each do |version|
@@ -67,17 +79,22 @@ def parse_version_history(page, gem_name)
 		versions << [gem_name, number, date, size_bytes]
 	end
 
-	versions
+	return versions
 end
 
+# Writes the header names to the CSV file.
+def write_history_header()
+	CSV.open("gem_history.csv", "ab") do |csv|
+		csv << ['name', 'version number', 'date', 'size']
+	end
+end
+
+# Appends the version array to the CSV file.
 def write_history(versions)
   CSV.open("gem_history.csv", "ab") do |csv|
-  	csv << ['name', 'version number', 'date', 'size']
-  	versions.each do |version|
-  		version.each do |v|
-	  		csv << v
-	  	end
-	  end
+		versions.each do |v|
+  		csv << v
+  	end
 	end
 end
 
