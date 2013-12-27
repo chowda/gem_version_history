@@ -72,8 +72,10 @@ def parse_version_history(page, gem_name)
 			size.to_i.kilobytes
 		when "MB" || "mb"
 			size.to_i.megabytes
+		when "GB" || "gb"
+			size.to_i.gigabytes
 		else
-			raise "Size type not handled! Please make a case for: #{type}"
+			0
 		end
 
 		versions << [gem_name, number, date, size_bytes]
